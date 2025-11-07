@@ -1,3 +1,5 @@
+#!/bin/sh
+
 if [ $# -ne 2 ]; then
     echo "Error: use $0 <filesdir> <searchstr>"
     exit 1
