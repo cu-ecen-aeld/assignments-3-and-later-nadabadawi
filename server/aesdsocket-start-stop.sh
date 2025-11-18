@@ -1,13 +1,9 @@
 #!/bin/sh
 
-# make clean
-# make all
-# ./aesdsocket -d
-
 case "$1" in
     start)
         echo "Starting aesdsocket..."
-        start-stop-daemon -S -n aesdsocket -d -a /usr/sbin/aesdsocket
+        start-stop-daemon -S -n aesdsocket -d -a /usr/bin/aesdsocket
         ;;
     stop)
         echo "Stopping aesdsocket..."
