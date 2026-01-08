@@ -13,6 +13,9 @@
 #include <sys/queue.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <fcntl.h>
+
+#define USE_AESD_CHAR_DEVICE 1
 
 volatile sig_atomic_t running = 1;
 static int sock_fd = -1;
@@ -78,6 +81,8 @@ void *handle_connection(void *arg)
             /* LOCK for write + read + send */
             pthread_mutex_lock(&file_mutex);
 
+#if !USE_AESD_CHAR_DEVICE
+
             FILE *wf = fopen("/var/tmp/aesdsocketdata", "a+");
             if (!wf) {
                 syslog(LOG_ERR, "open failed: %s", strerror(errno));
@@ -100,6 +105,34 @@ void *handle_connection(void *arg)
             }
 
             fclose(wf);
+
+#else
+                int fd = open("/dev/aesdchar", O_RDWR);
+                if (fd < 0) {
+                    syslog(LOG_ERR, "open failed: %s", strerror(errno));
+                    pthread_mutex_unlock(&file_mutex);
+                    break;
+                }
+
+                ssize_t w = write(fd, partial, packet_len);
+                if (w < 0) {
+                    syslog(LOG_ERR, "write failed: %s", strerror(errno));
+                    close(fd);
+                    pthread_mutex_unlock(&file_mutex);
+                    break;
+                }
+
+
+                lseek(fd, 0, SEEK_SET);
+
+                char sendbuf[1024];
+                ssize_t r;
+                while ((r = read(fd, sendbuf, sizeof(sendbuf))) > 0) {
+                    send(client_fd, sendbuf, r, 0);
+                }
+
+                close(fd);
+#endif
             pthread_mutex_unlock(&file_mutex);
 
             break;  // ONE request per connection
@@ -123,6 +156,7 @@ void *timestamp_thread(void *arg)
     while (running) {
         sleep(10);
 
+#if !USE_AESD_CHAR_DEVICE
         time_t now = time(NULL);
         struct tm *tm_info = localtime(&now);
 
@@ -141,6 +175,7 @@ void *timestamp_thread(void *arg)
             // printf("Wrote timestamp: %s", timebuf);   
         }
         pthread_mutex_unlock(&file_mutex);
+#endif
     }
     return NULL;
 }
@@ -220,14 +255,24 @@ int main(int argc, char *argv[])
     }
     freeaddrinfo(servinfo);
 
-    FILE *temp_file = fopen("/var/tmp/aesdsocketdata", "w");
-    if (!temp_file) {
-        syslog(LOG_ERR, "Failed to create/truncate aesdsocketdata: %s",
-            strerror(errno));
-        close(sock_fd);
-        return -1;
-    }
-    fclose(temp_file);
+
+    // char *filename = "";
+    // if (USE_AESD_CHAR_DEVICE) {
+    //     filename = "/dev/aesdchar";
+    // }
+    // else {  
+    //     filename = "/var/tmp/aesdsocketdata";
+    // }
+
+
+    // FILE *temp_file = fopen(filename, "w");
+    // if (!temp_file) {
+    //     syslog(LOG_ERR, "Failed to create/truncate file: %s",
+    //         strerror(errno));
+    //     close(sock_fd);
+    //     return -1;
+    // }
+    // fclose(temp_file);
 
 
     int res_listen = listen(sock_fd, 2);
@@ -315,7 +360,7 @@ int main(int argc, char *argv[])
         SLIST_INSERT_HEAD(&thread_head, node, entries);
         
 
-        thread_node_t *iter, *tmp;
+        thread_node_t *iter;
         // Check if any thread is completed and join it
         SLIST_FOREACH(iter, &thread_head, entries) 
         {
@@ -337,7 +382,9 @@ int main(int argc, char *argv[])
     syslog(LOG_INFO, "Caught signal, exiting");
     pthread_join(ts_thread, NULL);
     // printf("Caught signal, exiting\n");
+#if !USE_AESD_CHAR_DEVICE
     remove("/var/tmp/aesdsocketdata");
+#endif
     closelog();
     // _exit(0);
 
