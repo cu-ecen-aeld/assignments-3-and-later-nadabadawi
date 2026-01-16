@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <fcntl.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define USE_AESD_CHAR_DEVICE 1
 
@@ -114,16 +115,41 @@ void *handle_connection(void *arg)
                     break;
                 }
 
-                ssize_t w = write(fd, partial, packet_len);
-                if (w < 0) {
-                    syslog(LOG_ERR, "write failed: %s", strerror(errno));
-                    close(fd);
-                    pthread_mutex_unlock(&file_mutex);
-                    break;
+                // Check for AESDCHAR_IOCSEEKTO commands in the received data
+                const char *seek_prefix = "AESDCHAR_IOCSEEKTO:";
+                struct aesd_seekto seekto;
+                bool is_seek_cmd = false;
+
+                if (packet_len > strlen(seek_prefix) &&
+                    strncmp(partial, seek_prefix, strlen(seek_prefix)) == 0) {
+
+                    /* Parse X,Y */
+                    if (sscanf(partial + strlen(seek_prefix),
+                            "%u,%u",
+                            &seekto.write_cmd,
+                            &seekto.write_cmd_offset) == 2) {
+
+                        if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) < 0) {
+                            syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
+                            close(fd);
+                            pthread_mutex_unlock(&file_mutex);
+                            break;
+                        }
+
+                        is_seek_cmd = true;
+                    }
                 }
 
-
-                lseek(fd, 0, SEEK_SET);
+                if (!is_seek_cmd) {
+                    ssize_t w = write(fd, partial, packet_len);
+                    if (w < 0) {
+                        syslog(LOG_ERR, "write failed: %s", strerror(errno));
+                        close(fd);
+                        pthread_mutex_unlock(&file_mutex);
+                        break;
+                    }
+                    lseek(fd, 0, SEEK_SET);
+                }
 
                 char sendbuf[1024];
                 ssize_t r;
@@ -254,25 +280,6 @@ int main(int argc, char *argv[])
         return -1;
     }
     freeaddrinfo(servinfo);
-
-
-    // char *filename = "";
-    // if (USE_AESD_CHAR_DEVICE) {
-    //     filename = "/dev/aesdchar";
-    // }
-    // else {  
-    //     filename = "/var/tmp/aesdsocketdata";
-    // }
-
-
-    // FILE *temp_file = fopen(filename, "w");
-    // if (!temp_file) {
-    //     syslog(LOG_ERR, "Failed to create/truncate file: %s",
-    //         strerror(errno));
-    //     close(sock_fd);
-    //     return -1;
-    // }
-    // fclose(temp_file);
 
 
     int res_listen = listen(sock_fd, 2);
